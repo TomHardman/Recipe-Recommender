@@ -11,8 +11,13 @@ from langchain.prompts import PromptTemplate
 from pinecone import Pinecone
 from dotenv import load_dotenv
 from tqdm import tqdm
-from requests.exceptions import HTTPError
 
+import aiohttp
+import asyncio
+import time
+
+from concurrent.futures import ProcessPoolExecutor
+from multiprocessing import Pool
 
 class RecipeScraper(ABC):
     @abstractmethod
@@ -40,55 +45,72 @@ class GoodFoodScraper(RecipeScraper):
         
         return list(recipe_links)
 
-    def process_method_steps(self, steps: list[dict]):
+    def _process_method_steps(self, steps: list[dict]):
         processed_steps = []
         for i, step in enumerate(steps):
             step_content = step['content'][0]['data']['value'].replace('\xa0', ' ')
             processed_steps.append(f'Step {i+1}: {step_content}')
         return processed_steps
 
+    def _process_metadata(self, url, content):
+        metadata = {}
+        soup = BeautifulSoup(content, 'html.parser')
+            
+        json_txt_recipe = soup.find('script', id='__AD_SETTINGS__').string
+        json_recipe = json.loads(json_txt_recipe)['permutiveConfig']['permutiveModel']
+        json_cuisine = json.loads(json_txt_recipe)['targets']
+        
+        json_txt_ratings = soup.find('script', id='__POST_CONTENT__').string
+        json_ratings = json.loads(json_txt_ratings)['userRatings']
+        json_steps = json.loads(json_txt_ratings)['methodSteps']
+
+        metadata['title'] = json_recipe['title']
+        metadata['url'] = url
+        metadata['description'] = json_recipe['article']['description'].replace('\xa0', ' ')
+        metadata['ingredients'] = list(json_recipe['recipe']['ingredients'])
+        metadata['nutritional_info'] = json_recipe['recipe']['nutrition_info']
+        metadata['cooking_time'] = str(int(json_recipe['recipe']['cooking_time'])//60) + 'minutes'
+        metadata['prep_time'] = str(int(json_recipe['recipe']['prep_time'])//60) + 'minutes'
+        metadata['diet_types'] = json_recipe['recipe']['diet_types']
+        metadata['no_of_ratings'] = int(json_ratings['total'])
+        metadata['avg_rating'] = json_ratings['avg']
+        metadata['method_steps'] = self._process_method_steps(json_steps)
+
+        serves = json_recipe['recipe']['serves']
+        if serves:
+            metadata['serves'] = int(json_recipe['recipe']['serves'])
+        else:
+            metadata['serves'] = 2
+        
+        if 'cuisine' in json_cuisine.keys():
+            metadata['cuisine'] = json_cuisine['cuisine']
+        else:
+            metadata['cuisine'] = []
+    
+        return metadata
+
     def get_metadata(self, url) -> dict:
         response = requests.get(url)
-        metadata = {}
 
         if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            json_txt_recipe = soup.find('script', id='__AD_SETTINGS__').string
-            json_recipe = json.loads(json_txt_recipe)['permutiveConfig']['permutiveModel']
-            json_cuisine = json.loads(json_txt_recipe)['targets']
-            
-            json_txt_ratings = soup.find('script', id='__POST_CONTENT__').string
-            json_ratings = json.loads(json_txt_ratings)['userRatings']
-            json_steps = json.loads(json_txt_ratings)['methodSteps']
-
-            metadata['title'] = json_recipe['title']
-            metadata['url'] = url
-            metadata['description'] = json_recipe['article']['description'].replace('\xa0', ' ')
-            metadata['ingredients'] = list(json_recipe['recipe']['ingredients'])
-            metadata['nutritional_info'] = json_recipe['recipe']['nutrition_info']
-            metadata['cooking_time'] = str(int(json_recipe['recipe']['cooking_time'])//60) + 'minutes'
-            metadata['prep_time'] = str(int(json_recipe['recipe']['prep_time'])//60) + 'minutes'
-            metadata['diet_types'] = json_recipe['recipe']['diet_types']
-            metadata['no_of_ratings'] = int(json_ratings['total'])
-            metadata['avg_rating'] = json_ratings['avg']
-            metadata['method_steps'] = self.process_method_steps(json_steps)
-
-            serves = json_recipe['recipe']['serves']
-            if serves:
-                metadata['serves'] = int(json_recipe['recipe']['serves'])
-            else:
-                metadata['serves'] = 2
-            
-            if 'cuisine' in json_cuisine.keys():
-                metadata['cuisine'] = json_cuisine['cuisine']
-            else:
-                metadata['cuisine'] = []
-        
-        return metadata
+            metadata = self._process_metadata(url, response.content)
+            return metadata
+        return None
+    
+    async def aget_metadata(self, url) -> dict:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    content = await response.text()
+                    metadata = self._process_metadata(url, content)
+                    return metadata
+                return None  
     
     def scrape(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
                start_page=1, end_page=10) -> dict:
+        """
+        Scrapes recipe data from a range of pages (recipes sorted by popularity) on the GoodFood website.
+        """
         data = {}
 
         for pg in range(start_page, end_page+1):
@@ -102,6 +124,92 @@ class GoodFoodScraper(RecipeScraper):
                 data[id_] = metadata
         
         return data
+    
+    
+    async def ascrape(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
+               start_page=1, end_page=10) -> dict:
+        """
+        Scrapes recipe data from a range of pages (recipes sorted by popularity) on the GoodFood website.
+        Handles get requests asynchronously for faster processing.
+        """
+        data = {}
+
+        for pg in range(start_page, end_page+1):
+            url = self.base_url + search_url + str(pg)
+            recipe_links = self.get_recipe_links_on_page(url)
+            tasks = []
+            
+            for link in recipe_links:
+                tasks.append(asyncio.create_task(self.aget_metadata(link)))
+            
+            for task in tasks:
+                metadata = await task
+                id_ = hashlib.md5(metadata['url'].encode()).hexdigest()
+
+                metadata['id'] = id_
+                data[id_] = metadata
+        
+        return data
+    
+
+    async def ascrape_mp(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
+                  start_page=1, end_page=10) -> dict:
+        """
+        Scrapes recipes using multiprocessing for metadata processing. 
+        """
+        data = {}
+        recipe_links = []
+
+        # Gather all recipe links asynchronously across pages
+        for pg in range(start_page, end_page + 1):
+            page_url = self.base_url + search_url + str(pg)
+            links = self.get_recipe_links_on_page(page_url)  # Should be an async method
+            recipe_links.extend(links)
+
+        # Process metadata using multiprocessing
+        with ProcessPoolExecutor() as pool:
+            loop = asyncio.get_event_loop()
+            tasks = [loop.run_in_executor(pool, self.get_metadata, link) for link in recipe_links]
+            
+            # Await the results of the tasks
+            results = await asyncio.gather(*tasks)
+
+            for metadata in results:
+                if metadata:
+                    id_ = hashlib.md5(metadata['url'].encode()).hexdigest()
+                    metadata['id'] = id_
+                    data[id_] = metadata
+
+        return data
+    
+
+    def scrape_mp(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
+              start_page=1, end_page=10) -> dict:
+        """
+        Scrapes recipes using multiprocessing for metadata processing (synchronous).
+        """
+        data = {}
+        recipe_links = []
+
+        # Gather all recipe links synchronously across pages
+        for pg in range(start_page, end_page + 1):
+            page_url = self.base_url + search_url + str(pg)
+            links = self.get_recipe_links_on_page(page_url)  # Should be a synchronous method
+            recipe_links.extend(links)
+
+        # Process metadata using multiprocessing
+        with Pool() as pool:
+            results = pool.map(self.get_metadata, recipe_links)
+
+        # Process the results and build the data dictionary
+        for metadata in results:
+            if metadata:
+                id_ = hashlib.md5(metadata['url'].encode()).hexdigest()
+                metadata['id'] = id_
+                data[id_] = metadata
+
+        return data
+    
     
     def scrape_and_upsert(self, embedding_model, vector_index, llm, prompt_template, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=',
                           start_page=1, end_page=50, chunk_size=2):
