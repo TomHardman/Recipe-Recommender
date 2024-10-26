@@ -1,6 +1,8 @@
 import os
 from dotenv import load_dotenv
 
+from pydantic import Field
+
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_pinecone import PineconeVectorStore
 from langchain.prompts import PromptTemplate
@@ -29,6 +31,7 @@ def create_recipe_retriever_tool(k):
     'Cooking Time: {cooking_time} '
     'Average Rating: {avg_rating}, '
     'Serves: {serves}, '
+    'Dietary Information: {diet_types}, '
     'URL: {url}, ')
     retriever_tool = create_retriever_tool(retriever, 
                                            "recipe_retriever", 

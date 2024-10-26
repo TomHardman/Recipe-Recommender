@@ -9,38 +9,26 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
-from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
-from langchain.prompts import PromptTemplate
 from langchain import hub
 
+from recipe_scraper import GoodFoodScraper
 from retriever_tool import create_recipe_retriever_tool
+from scraper_tool import create_recipe_scraper_tool
 
 
 load_dotenv()
-pinecone_key = os.getenv("PINECONE_API_KEY")
 openai_key = os.getenv("OPENAI_API_KEY")
-pinecone_index = os.getenv("PINECONE_INDEX")
-
-# Construct language model
-llm = ChatOpenAI(model="gpt-4o-mini")
-
-
-### Answer question ###
-system_prompt = (
-    "You are primarily an assistant for retrieving and recommending recipes. "
-    "You should answer questions about recipes, ingredients, cooking times, and other recipe-related questions. "
-    "If you are asked questions not relating to recipes, you should respond with 'I am a recipe assistant and can only answer questions about recipes.' "
-)
 
 
 TOOL_SYSTEM_PROMPT = (
 'You are primarily an assistant for retrieving and recommending recipes. '
 'You should answer questions about recipes, ingredients, cooking times, and other recipe-related questions. '
 'If you are asked questions not relating to recipes, you should respond with "I am a recipe assistant and can only answer questions about recipes." '
-'Given the previous context, answer the following questions as best you can. If necessary you have access to a tool for recipe retrieval.\n\n'
+'Given the previous context, answer the following questions as best you can. '
+'If necessary you have access to a tool for recipe retrieval and a tool for scraping data from a recipe URL.\n\n'
 
 
 'The recipe_retriever tool should only be used to recommend NEW recipes.\n'
@@ -48,25 +36,23 @@ TOOL_SYSTEM_PROMPT = (
 'Do not overload the response with recipe metadata unless specifically requested.\n'
 'After retrieving an intial set of recipes, evaluate them based on your own judgement. \n'
 'If necessary perform additional searches to find the best recipes by changing the query.\n\n'
+
+'The recipe_scraper tool should be used to get more detailed data about a specific recipe, such '
+'as the method required for cooking. \n\n'
+
 'In your output always include the title of the recipe and the URL.\n'
 'If asked for more recipes than the tool outputs, you can use the tool multiple times.\n\n'
 )
 
 
-# Create a retriever tool
+# Create tools
+gf_scraper = GoodFoodScraper()
+recipe_scraper = create_recipe_scraper_tool(gf_scraper)
 recipe_reriever = create_recipe_retriever_tool(5)
-TOOLS = [recipe_reriever]
+TOOLS = [recipe_reriever, recipe_scraper]
 
-
-# Create an agent prompt
-agent_prompt = ChatPromptTemplate.from_messages(
-    [   
-        ("system", TOOL_SYSTEM_PROMPT),
-        MessagesPlaceholder("chat_history"),
-        ("human", '{input}'),
-    ]
-)
-
+# Construct language model
+llm = ChatOpenAI(model="gpt-4o-mini")
 
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
@@ -86,7 +72,6 @@ class RecipeAgent:
 
         memory = MemorySaver()
         self.graph = builder.compile(checkpointer=memory)
-        print(self.graph.get_graph().draw_mermaid())
     
     @staticmethod
     def exists_action(state: AgentState):
