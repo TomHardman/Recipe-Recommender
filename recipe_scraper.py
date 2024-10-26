@@ -4,7 +4,6 @@ import json
 import os
 import hashlib
 from abc import ABC, abstractmethod
-from decimal import Decimal
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.prompts import PromptTemplate
@@ -14,14 +13,17 @@ from tqdm import tqdm
 
 import aiohttp
 import asyncio
-import time
 
-from concurrent.futures import ProcessPoolExecutor
 from multiprocessing import Pool
+
 
 class RecipeScraper(ABC):
     @abstractmethod
     def get_metadata(self, url):
+        pass
+
+    @abstractmethod
+    def aget_metadata(self, url):
         pass
 
     @abstractmethod
@@ -125,7 +127,6 @@ class GoodFoodScraper(RecipeScraper):
         
         return data
     
-    
     async def ascrape(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
                start_page=1, end_page=10) -> dict:
         """
@@ -150,43 +151,11 @@ class GoodFoodScraper(RecipeScraper):
                 data[id_] = metadata
         
         return data
-    
-
-    async def ascrape_mp(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
-                  start_page=1, end_page=10) -> dict:
-        """
-        Scrapes recipes using multiprocessing for metadata processing. 
-        """
-        data = {}
-        recipe_links = []
-
-        # Gather all recipe links asynchronously across pages
-        for pg in range(start_page, end_page + 1):
-            page_url = self.base_url + search_url + str(pg)
-            links = self.get_recipe_links_on_page(page_url)  # Should be an async method
-            recipe_links.extend(links)
-
-        # Process metadata using multiprocessing
-        with ProcessPoolExecutor() as pool:
-            loop = asyncio.get_event_loop()
-            tasks = [loop.run_in_executor(pool, self.get_metadata, link) for link in recipe_links]
-            
-            # Await the results of the tasks
-            results = await asyncio.gather(*tasks)
-
-            for metadata in results:
-                if metadata:
-                    id_ = hashlib.md5(metadata['url'].encode()).hexdigest()
-                    metadata['id'] = id_
-                    data[id_] = metadata
-
-        return data
-    
 
     def scrape_mp(self, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=', 
               start_page=1, end_page=10) -> dict:
         """
-        Scrapes recipes using multiprocessing for metadata processing (synchronous).
+        Scrapes recipes using multiprocessing for metadata processing.
         """
         data = {}
         recipe_links = []
@@ -209,7 +178,6 @@ class GoodFoodScraper(RecipeScraper):
                 data[id_] = metadata
 
         return data
-    
     
     def scrape_and_upsert(self, embedding_model, vector_index, llm, prompt_template, search_url='/search?tab=recipe&mealType=dinner&sort=rating&page=',
                           start_page=1, end_page=50, chunk_size=2):
@@ -238,7 +206,7 @@ class GoodFoodScraper(RecipeScraper):
                 vector_index.upsert(vectors)
             except Exception as e:
                 print(f"Bad Request: - Ignoring this chunk.")
-        
+
 
 if __name__ == "__main__":
     scraper = GoodFoodScraper()
