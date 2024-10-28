@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from functools import partial
 from langchain_core.tools.simple import Tool
 
-from recipe_scraper import RecipeScraper
+from .recipe_scraper import RecipeScraper
 
 
 def scrape_recipe(url: str, scraper: RecipeScraper) -> str:

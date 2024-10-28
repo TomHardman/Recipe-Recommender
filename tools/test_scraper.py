@@ -1,6 +1,6 @@
 import asyncio
 import time
-from recipe_scraper import GoodFoodScraper
+from tools.recipe_scraper import GoodFoodScraper
 
 scraper = GoodFoodScraper()
 
