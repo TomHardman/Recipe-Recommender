@@ -5,6 +5,7 @@ from typing import Annotated, TypedDict
 
 
 from langchain_core.messages import AnyMessage, AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -55,12 +56,15 @@ class AgentState(TypedDict):
 
 
 class RecipeAgent:
-    def __init__(self):
+    def __init__(self, streaming=True):
         self._tools = {t.name: t for t in TOOLS}
-        self._tools_llm = ChatOpenAI(model="gpt-4o-mini").bind_tools(TOOLS)
+        self._tools_llm = ChatOpenAI(model="gpt-4o-mini", streaming=streaming).bind_tools(TOOLS)
 
         builder = StateGraph(AgentState)
-        builder.add_node('call_tools_llm', self.call_tools_llm)
+        if not streaming:
+            builder.add_node('call_tools_llm', self.call_tools_llm)
+        else:
+            builder.add_node('call_tools_llm', self.acall_tools_llm)
         builder.add_node('invoke_tools', self.invoke_tools)
         builder.add_conditional_edges('call_tools_llm', RecipeAgent.exists_action, {'more_tools': 'invoke_tools', 'no_more_tools': END})
         builder.add_edge('invoke_tools', 'call_tools_llm')
@@ -80,6 +84,12 @@ class RecipeAgent:
         messages = state['messages']
         messages = [SystemMessage(content=TOOL_SYSTEM_PROMPT)] + messages
         message = self._tools_llm.invoke(messages)
+        return {'messages': [message]}
+
+    async def acall_tools_llm(self, state: AgentState, config: RunnableConfig):
+        messages = state['messages']
+        messages = [SystemMessage(content=TOOL_SYSTEM_PROMPT)] + messages
+        message = await self._tools_llm.ainvoke(messages, config)
         return {'messages': [message]}
     
     def invoke_tools(self, state: AgentState):
