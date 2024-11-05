@@ -36,3 +36,48 @@
     transform: rotate(360deg);
   }
 }
+
+.sidebar {
+  position: fixed;          /* Fixes the sidebar to the side of the viewport */
+  left: 0;                  /* Positions it on the left */
+  top: 0;                   /* Aligns it to the top */
+  width: 250px;             /* Sets a fixed width */
+  height: 100vh;            /* Makes it full height of the viewport */
+  background-color: #f9f4f4; /* Light background color */
+  box-shadow: 2px 0 5px rgba(11, 11, 11, 0.2); /* Adds shadow for depth */
+  padding: 10px;            /* Adds some padding inside */
+  overflow-y: auto;         /* Allows scrolling if content exceeds viewport height */
+  z-index: 1000;            /* Keeps the sidebar on top of other elements */
+}
+
+.chat-list {
+  list-style-type: none;
+  padding: 0;
+}
+
+.chat-item {
+  padding: 10px;
+  cursor: pointer;
+  border-bottom: 1px solid #c3c3c3;
+}
+
+.chat-item:hover {
+  background-color: #d6d0d0;
+}
+
+/* Circular add-chat button */
+.add-chat-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;
+  height: 50px;
+  margin: 20px auto 0; /* Centered horizontally */
+  border: none;
+  border-radius: 50%; /* Makes the button circular */
+  background-color: #007bff;
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
