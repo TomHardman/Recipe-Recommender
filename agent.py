@@ -23,7 +23,7 @@ openai_key = os.getenv("OPENAI_API_KEY")
 TOOL_SYSTEM_PROMPT = (
 'You are primarily an assistant for retrieving and recommending recipes. '
 'You should answer questions about recipes, ingredients, cooking times, and other recipe-related questions. '
-'If you are asked questions not relating to recipes, you should respond with "I am a recipe assistant and can only answer questions about recipes." '
+'If you are asked questions not relating to recipes, you should respond with a helpful message indicating that you are a recipe assistant. '
 'Given the previous context, answer the following questions as best you can. '
 'If necessary you have access to a tool for recipe retrieval and a tool for scraping data from a recipe URL.\n\n'
 
@@ -32,7 +32,7 @@ TOOL_SYSTEM_PROMPT = (
 'Any questions about previously retrieved recipes MUST be answered using the context provided!\n'
 'Do not overload the response with recipe metadata unless specifically requested.\n'
 'After retrieving an intial set of recipes, evaluate them based on your own judgement. \n'
-'If necessary perform additional searches to find the best recipes by changing the query.\n\n'
+'If necessary perform additional searches to find the best/more recipes by changing the search query.\n\n'
 
 'The recipe_scraper tool should be used to get more detailed data about a specific recipe, such '
 'as the method required for cooking. \n\n'
@@ -61,10 +61,7 @@ class RecipeAgent:
         self._tools_llm = ChatOpenAI(model="gpt-4o-mini", streaming=streaming).bind_tools(TOOLS)
 
         builder = StateGraph(AgentState)
-        if not streaming:
-            builder.add_node('call_tools_llm', self.call_tools_llm)
-        else:
-            builder.add_node('call_tools_llm', self.acall_tools_llm)
+        builder.add_node('call_tools_llm', self.call_tools_llm)
         builder.add_node('invoke_tools', self.invoke_tools)
         builder.add_conditional_edges('call_tools_llm', RecipeAgent.exists_action, {'more_tools': 'invoke_tools', 'no_more_tools': END})
         builder.add_edge('invoke_tools', 'call_tools_llm')
@@ -79,14 +76,8 @@ class RecipeAgent:
         if len(result.tool_calls) == 0:
             return 'no_more_tools'
         return 'more_tools'
-    
-    def call_tools_llm(self, state: AgentState):
-        messages = state['messages']
-        messages = [SystemMessage(content=TOOL_SYSTEM_PROMPT)] + messages
-        message = self._tools_llm.invoke(messages)
-        return {'messages': [message]}
 
-    async def acall_tools_llm(self, state: AgentState, config: RunnableConfig):
+    async def call_tools_llm(self, state: AgentState, config: RunnableConfig):
         messages = state['messages']
         messages = [SystemMessage(content=TOOL_SYSTEM_PROMPT)] + messages
         message = await self._tools_llm.ainvoke(messages, config)
